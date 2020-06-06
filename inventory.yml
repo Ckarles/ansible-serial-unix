@@ -1,0 +1,4 @@
+all:
+  hosts:
+    templar:
+      ansible_connection: serial
