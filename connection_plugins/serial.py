@@ -34,6 +34,7 @@ class Connection(ConnectionBase):
         super(Connection, self).__init__(*args, **kwargs)
 
         #self.user = self._play_context.remote_user
+        self.host = 'templar'
         self.user = 'root'
         self.ser = serial.Serial()
         self.ser.port = '/dev/pts/2'
@@ -41,8 +42,8 @@ class Connection(ConnectionBase):
 
         self.is_connected = False
         self.rw_queue = queue.SimpleQueue()
-        self.stdout = io.StringIO()
-        self.stderr = io.StringIO()
+        self.stdout = io.BytesIO()
+        self.stderr = io.BytesIO()
         
     def __del__(self):
         self.stdout.close()
@@ -54,6 +55,7 @@ class Connection(ConnectionBase):
         if not self.is_connected:
             self.ser.open()
             self.is_connected = True
+            self.ser_text = io.TextIOWrapper(self.ser)
 
         if self.get_shell_type() == 'login':
             self.login()
@@ -65,32 +67,36 @@ class Connection(ConnectionBase):
 
         super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
-        display.vv('>> {0}'.format(cmd))
-        self.ser.write('{cmd}{end}'.format(cmd=cmd, end=end).encode())
+        self.write_buffer('{cmd}{end}'.format(cmd=cmd, end=end))
+        display.vvv('>> {0}'.format(repr(cmd)))
 
         for l in self.read_buffer():
-            #display.vv('<< {0}'.format(repr(l)))
             m = l
             if l.startswith(self.ps1):
                 break
-            #m = l.replace(self.ps1, '', 1)
-            self.stdout.write(m)
-            #display.vv('<< {0}'.format(m))
+            self.stdout.write(bytes(m, 'utf-8'))
+            display.vvv('<< {0}'.format(m))
 
-        self.ser.write(b'echo $?\n')
-        code = list(self.read_buffer())[1]
+        self.stdout.seek(0)
+
+        self.write_buffer('echo $?\n')
+        code = list(self.read_buffer())[-2]
 
         return (int(code), self.stdout, self.stderr)
 
     def put_file(self, in_path, out_path):
-        display.debug("in put_file")
+        ''' transfer a file from local to remote '''
+
+        super(Connection, self).put_file(in_path, out_path)
+
+        display.vvv(u"PUT {0} TO {1}".format(in_path, out_path), host=self.host)
+
         with open(in_path, 'rb') as f:
-            self.ser.write('cat << eof > {}'.format(out_path).encode())
+            while (b := f.read(512)):
+                self.write_buffer(bytes('head -c -1 >> \'{}\' <<\'<<eof>>\'\n'.format(out_path), 'utf-8') + b + b'\n<<eof>>\n', raw=True, echo=False)
 
-            for b in f:
-                self.ser.write(b)
-
-            self.ser.write('eof'.encode())
+        # flush read buffer
+        list(self.ser)
 
     def fetch_file(self, in_path, out_path):
         display.debug("in fetch_file")
@@ -99,9 +105,38 @@ class Connection(ConnectionBase):
         display.debug("in close")
 
         self.logout()
+        self.ser_text.close()
+        self.rw_queue.close()
         self.ser.close()
 
     def read_buffer(self, raw=False):
+
+        stream = self.ser_text
+
+        overtext = ''
+
+        for m in stream:
+            if not overtext:
+                if self.rw_queue.empty():
+                    yield m
+                    continue
+                else:
+                    qm = self.rw_queue.get()
+            else:
+                qm = overtext
+
+            if qm == m:
+                overtext = ''
+                continue
+            else:
+                m = m.rstrip('\n')
+                if qm.startswith(m):
+                    overtext = qm.replace(m, '', 1)
+                else:
+                    # raise error
+                    display.v('error: echo seems distorded: \n expected: {0}\n received: {1}'.format(repr(qm), repr(m)))
+
+    def get_shell_type(self):
         # 7-bit C1 ANSI sequences
         ansi_escape = re.compile(r'''
             \x1B  # ESC
@@ -115,33 +150,12 @@ class Connection(ConnectionBase):
             )
         ''', re.VERBOSE)
 
-        for b in self.ser:
-
-            # flush the queue first
-            if not self.rw_queue.empty():
-                if self.rw_queue.get() != b:
-                    # raise error
-                    display.v('error: returned message is distorded')
-
-            if raw:
-                yield b
-            #display.vv(b.decode())
-            # decode the line
-            d = b.decode('unicode_escape')
-            # get rid of escape sequences
-            e = ansi_escape.sub('', d)
-            display.vvv('<< {0}'.format(e))
-            yield e
-
-    def get_shell_type(self):
         # send line-feed character
         ctrl_j = chr(10)
-        self.ser.write(bytes(ctrl_j, 'utf-8'))
+        self.write_buffer(ctrl_j, echo=False)
 
-        line = ''
-
-        for l in self.read_buffer():
-            line = l
+        bline = list(self.read_buffer())[-1]
+        line = ansi_escape.sub('', bytes(bline, 'utf-8').decode('unicode_escape'))
 
         if re.search(' login: $', line):
             display.debug('login ready')
@@ -158,18 +172,23 @@ class Connection(ConnectionBase):
 
 
     def login(self):
-        self.ser.write('{cmd}{end}'.format(cmd=self.user, end='\n').encode())
+        self.write_buffer('{cmd}{end}'.format(cmd=self.user, end='\n'))
 
+        list(self.read_buffer())
         if self.get_shell_type() != 'shell':
             print('ERROR: cannot login')
 
     def logout(self):
         ctrl_d = chr(4)
-        self.ser.write(bytes(ctrl_d, 'utf-8'))
+        self.write_buffer(ctrl_d, echo=False)
 
         if self.get_shell_type() == 'login':
             display.debug('Sucessful logout')
 
-    def write_buffer(m):
-        self.rw_queue.put(m)
-        self.ser.write(m)
+    def write_buffer(self, m, raw=False, echo=True):
+        if echo:
+            self.rw_queue.put(m)
+        if raw:
+            self.ser.write(m)
+        else:
+            self.ser_text.write(m)
