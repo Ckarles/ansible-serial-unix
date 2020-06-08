@@ -109,9 +109,11 @@ class Connection(ConnectionBase):
 
         super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
+        stderr_remote = 'error-serial.an'
+
         # Append return code request to the command
         display.vvv('>> {0}'.format(repr(cmd)), host=self.host)
-        cmd = '{cmd}; echo $?{end}'.format(cmd=cmd, end=end)
+        cmd = '{cmd} 2>{stderr}; echo $?{end}'.format(cmd=cmd, end=end, stderr=stderr_remote)
         self.write_buffer(cmd)
 
         # read the output of the command, store the last line in the code var only
@@ -125,9 +127,19 @@ class Connection(ConnectionBase):
                 display.vvv('<< {0}'.format(m), host=self.host)
             m = l
         code = m
-
         # reset cursor on stdout stream
         self.stdout.seek(0)
+
+        # get stderr
+        self.write_buffer('cat {stderr}; rm {stderr}'.format(stderr=stderr_remote))
+        for l in self.read_buffer():
+            # stop reading when getting a command prompt
+            if l.startswith(self.ps1):
+                break
+            self.stderr.write(bytes(m, 'utf-8'))
+            display.vvv('<< {0}'.format(m), host=self.host)
+
+        self.stderr.seek(0)
 
         return (int(code), self.stdout, self.stderr)
 
