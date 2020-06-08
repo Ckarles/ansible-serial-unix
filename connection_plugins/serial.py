@@ -63,24 +63,29 @@ class Connection(ConnectionBase):
         return self
 
     def exec_command(self, cmd, in_data=None, sudoable=True, end='\n'):
-        ''' run a command on the local host '''
+        ''' run a command on the remote host'''
 
         super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
-        self.write_buffer('{cmd}{end}'.format(cmd=cmd, end=end))
+        # Append return code request to the command
+        cmd = '{cmd}; echo $?{end}'.format(cmd=cmd, end=end)
         display.vvv('>> {0}'.format(repr(cmd)))
+        self.write_buffer(cmd)
 
+        # read the output of the command, store the last line in the code var only
+        m = None
         for l in self.read_buffer():
-            m = l
+            # stop reading when getting a command invite
             if l.startswith(self.ps1):
                 break
-            self.stdout.write(bytes(m, 'utf-8'))
-            display.vvv('<< {0}'.format(m))
+            if m:
+                self.stdout.write(bytes(m, 'utf-8'))
+                display.vvv('<< {0}'.format(m))
+            m = l
+        code = m
 
+        # reset cursor on stdout stream
         self.stdout.seek(0)
-
-        self.write_buffer('echo $?\n')
-        code = list(self.read_buffer())[-2]
 
         return (int(code), self.stdout, self.stderr)
 
@@ -118,11 +123,11 @@ class Connection(ConnectionBase):
         overtext = ''
 
         for m in stream:
-            display.vvv('<<<< {0}'.format(repr(m)))
-            display.vvv('---- overtext: {0}'.format(repr(overtext)))
+            #display.vvv('<<<< {0}'.format(repr(m)))
+            #display.vvv('---- overtext: {0}'.format(repr(overtext)))
             if not overtext:
                 if self.rw_queue.empty():
-                    display.vvv('---- yield: {0}'.format(repr(m)))
+                    #display.vvv('---- yield: {0}'.format(repr(m)))
                     yield m
                     continue
                 else:
