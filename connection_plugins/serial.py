@@ -37,7 +37,7 @@ class Connection(ConnectionBase):
         self.host = 'templar'
         self.user = 'root'
         self.ser = serial.Serial()
-        self.ser.port = '/dev/pts/2'
+        self.ser.port = '/dev/pts/1'
         self.ser.timeout = 1
 
         self.is_connected = False
@@ -108,6 +108,8 @@ class Connection(ConnectionBase):
         self.ser_text.close()
         self.rw_queue.close()
         self.ser.close()
+        self.is_connected = False
+
 
     def read_buffer(self, raw=False):
 
@@ -116,8 +118,11 @@ class Connection(ConnectionBase):
         overtext = ''
 
         for m in stream:
+            display.vvv('<<<< {0}'.format(repr(m)))
+            display.vvv('---- overtext: {0}'.format(repr(overtext)))
             if not overtext:
                 if self.rw_queue.empty():
+                    display.vvv('---- yield: {0}'.format(repr(m)))
                     yield m
                     continue
                 else:
@@ -155,6 +160,7 @@ class Connection(ConnectionBase):
         self.write_buffer(ctrl_j, echo=False)
 
         bline = list(self.read_buffer())[-1]
+
         line = ansi_escape.sub('', bytes(bline, 'utf-8').decode('unicode_escape'))
 
         if re.search(' login: $', line):
