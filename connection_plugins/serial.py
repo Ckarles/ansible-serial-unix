@@ -6,10 +6,48 @@ DOCUMENTATION = '''
     short_description: execute on a serial device
     description:
         - This connection plugin allows ansible to execute tasks over a serial device.
-    author: Charles Durieux
-    version_added: historical
-    notes:
-        - foobar
+    author: Charles Durieux (charles-durieux@negentropy.in.net)
+    version_added: None
+    options:
+      host:
+        description: Hostname of the remote machine
+        default: inventory_hostname
+        vars:
+          - name: ansible_host
+      serial_port:
+        description: Serial port to connect to
+        default: /dev/ttyS0
+        ini:
+          - section: defaults
+            key: remote_serial_port
+        env:
+          - name: ANSIBLE_REMOTE_SERIAL_PORT
+        vars:
+          - name: ansible_serial_port
+      remote_user:
+        description:
+          - User name with which to login to the remote server, normally set by the remote_user keyword.
+          - If no user is supplied, root is used
+        default: root
+        ini:
+          - section: defaults
+            key: remote_user
+        env:
+          - name: ANSIBLE_REMOTE_USER
+        vars:
+          - name: ansible_user
+      serial_timeout:
+        description:
+          - Number of seconds the connection will wait for a response
+        default: 1
+        type: integer
+        ini:
+          - section: defaults
+            key: timeout
+        env:
+          - name: ANSIBLE_SERIAL_TIMEOUT
+        vars:
+          - name: ansible_serial_timeout
 '''
 
 import io
@@ -33,12 +71,13 @@ class Connection(ConnectionBase):
 
         super(Connection, self).__init__(*args, **kwargs)
 
-        #self.user = self._play_context.remote_user
-        self.host = 'templar'
-        self.user = 'root'
+        user = self._play_context.remote_user
+        self.user = user if user else 'root'
+
+        host = self._play_context.remote_addr
+        self.host = host if host else '/dev/ttyS0'
+
         self.ser = serial.Serial()
-        self.ser.port = '/dev/pts/1'
-        self.ser.timeout = 1
 
         self.is_connected = False
         self.rw_queue = queue.SimpleQueue()
@@ -53,6 +92,9 @@ class Connection(ConnectionBase):
         ''' connect to the serial device '''
 
         if not self.is_connected:
+            self.ser.port = self.get_option('serial_port')
+            self.ser.timeout = self.get_option('serial_timeout')
+
             self.ser.open()
             self.is_connected = True
             self.ser_text = io.TextIOWrapper(self.ser)
@@ -68,7 +110,7 @@ class Connection(ConnectionBase):
         super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
         # Append return code request to the command
-        display.vvv('>> {0}'.format(repr(cmd)))
+        display.vvv('>> {0}'.format(repr(cmd)), host=self.host)
         cmd = '{cmd}; echo $?{end}'.format(cmd=cmd, end=end)
         self.write_buffer(cmd)
 
@@ -80,7 +122,7 @@ class Connection(ConnectionBase):
                 break
             if m:
                 self.stdout.write(bytes(m, 'utf-8'))
-                display.vvv('<< {0}'.format(m))
+                display.vvv('<< {0}'.format(m), host=self.host)
             m = l
         code = m
 
