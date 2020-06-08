@@ -68,8 +68,8 @@ class Connection(ConnectionBase):
         super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
         # Append return code request to the command
-        cmd = '{cmd}; echo $?{end}'.format(cmd=cmd, end=end)
         display.vvv('>> {0}'.format(repr(cmd)))
+        cmd = '{cmd}; echo $?{end}'.format(cmd=cmd, end=end)
         self.write_buffer(cmd)
 
         # read the output of the command, store the last line in the code var only
