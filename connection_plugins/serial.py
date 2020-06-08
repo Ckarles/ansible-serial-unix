@@ -75,7 +75,7 @@ class Connection(ConnectionBase):
         # read the output of the command, store the last line in the code var only
         m = None
         for l in self.read_buffer():
-            # stop reading when getting a command invite
+            # stop reading when getting a command prompt
             if l.startswith(self.ps1):
                 break
             if m:
@@ -146,9 +146,24 @@ class Connection(ConnectionBase):
                     # raise error
                     display.v('error: echo seems distorded: \n expected: {0}\n received: {1}'.format(repr(qm), repr(m)))
 
-    def get_shell_type(self):
+    def is_cmd_prompt(self, line):
+        '''Return True and the command prompt type if the line is a command prompt'''
+
+
+
+    def get_shell_type(self, line=None):
+
+        # get a prompt invite none
+        if not line:
+            # send line-feed character
+            ctrl_j = chr(10)
+            self.write_buffer(ctrl_j, echo=False)
+
+            line = list(self.read_buffer())[-1]
+
+        # http://ascii-table.com/ansi-escape-sequences-vt-100.php
         # 7-bit C1 ANSI sequences
-        ansi_escape = re.compile(r'''
+        ansi_sequence = re.compile(r'''
             \x1B  # ESC
             (?:   # 7-bit C1 Fe (except CSI)
                 [@-Z\\-_]
@@ -160,40 +175,38 @@ class Connection(ConnectionBase):
             )
         ''', re.VERBOSE)
 
-        # send line-feed character
-        ctrl_j = chr(10)
-        self.write_buffer(ctrl_j, echo=False)
+        ## end with ANSI CPR (Response to cursor position request)
+        #ansi_end_CPR = r'\x1B\[\d+;\d+R$'
 
-        bline = list(self.read_buffer())[-1]
+        escaped_line = bytes(line, 'utf-8').decode('unicode_escape')
+        # remove ANSI sequences
+        clean_line = ansi_sequence.sub('', escaped_line)
 
-        line = ansi_escape.sub('', bytes(bline, 'utf-8').decode('unicode_escape'))
-
-        if re.search(' login: $', line):
-            display.debug('login ready')
+        if re.search(' login: $', clean_line):
             return 'login'
 
-        elif re.search('(\$|#) $', line):
+        elif re.search('(\$|#) $', clean_line):
             self.ps1 = line
-            display.debug('shell ready')
             return 'shell'
 
         else:
-            print('ERROR: unkown state')
             return 'unkown'
-
 
     def login(self):
         self.write_buffer('{cmd}{end}'.format(cmd=self.user, end='\n'))
 
-        list(self.read_buffer())
-        if self.get_shell_type() != 'shell':
+        line = list(self.read_buffer())[-1]
+
+        if self.get_shell_type(line=line) != 'shell':
             print('ERROR: cannot login')
 
     def logout(self):
         ctrl_d = chr(4)
         self.write_buffer(ctrl_d, echo=False)
 
-        if self.get_shell_type() == 'login':
+        line = list(self.read_buffer())[-1]
+
+        if self.get_shell_type(line=line) == 'login':
             display.debug('Sucessful logout')
 
     def write_buffer(self, m, raw=False, echo=True):
