@@ -188,10 +188,6 @@ class Connection(ConnectionBase):
                     # raise error
                     display.v('error: echo seems distorded: \n expected: {0}\n received: {1}'.format(repr(qm), repr(m)))
 
-    def is_cmd_prompt(self, line):
-        '''Return True and the command prompt type if the line is a command prompt'''
-
-
 
     def get_shell_type(self, line=None):
 
