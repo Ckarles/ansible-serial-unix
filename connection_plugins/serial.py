@@ -26,7 +26,7 @@ DOCUMENTATION = '''
           - name: ansible_serial_port
       payload_size:
         description:
-          - to come
+          - bytesize of payloads on write channel
         default: 512
         ini:
           - section: defaults
@@ -37,7 +37,7 @@ DOCUMENTATION = '''
           - name: ansible_serial_payload_size
       remote_user:
         description:
-          - User name with which to login to the remote server, normally set by the remote_user keyword.
+          - User name with which to login to the remote server, normally set by the remote_user keyword
           - If no user is supplied, root is used
         default: root
         ini:
