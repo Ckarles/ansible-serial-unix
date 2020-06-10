@@ -48,7 +48,7 @@ DOCUMENTATION = '''
         vars:
           - name: ansible_user
 '''
-
+import base64
 import dataclasses
 import io
 import queue
@@ -179,7 +179,21 @@ class Connection(ConnectionBase):
         list(self.read_q_until(self.is_line("<<--END-TR-->>"), inclusive=False))
 
     def fetch_file(self, in_path, out_path):
-        display.debug("in fetch_file")
+        ''' copy a file from remote to local '''
+
+        super(Connection, self).fetch_file(in_path, out_path)
+
+        display.vvv(u'FETCH {0} TO {1}'.format(in_path, out_path), host=self.host)
+
+        #best option: (requires coreutils on remote machine)
+        #cmd = 'split -b 512 --filter "base64" "{0}"'.format(in_path)
+        cmd = 'base64 {0}'.format(in_path)
+
+        with open(out_path, 'wb') as f:
+            buf = b''
+            for b in self.low_cmd(cmd, 'fetch'):
+                buf = buf + b.rstrip()
+            f.write(base64.b64decode(buf))
 
     def close(self):
         display.debug("in close")
@@ -237,7 +251,10 @@ class Connection(ConnectionBase):
         ''' compare a message with a specified line '''
         def c(m):
             if type(m) is bytes:
-                m = m.decode()
+                try:
+                    m = m.decode()
+                except(UnicodeDecodeError, AttributeError):
+                    return False
             return m.rstrip() == line.rstrip()
         return c
 
