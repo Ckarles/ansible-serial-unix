@@ -1,7 +1,0 @@
-all:
-  hosts:
-    templar:
-      ansible_connection: serial
-      ansible_python_interpreter: /usr/bin/python3
-      ansible_serial_port: /dev/pts/1
-      ansible_serial_timeout: 1
