@@ -195,12 +195,14 @@ class Connection(ConnectionBase):
         self.is_connected = False
 
     def read(self):
+        ''' read from the serial connection to the read queue '''
         while not self.stop_event.wait(self.loop_interval):
             for received in self.ser:
                 display.vvvv('<<<< {0}'.format(repr(received)))
                 self.q['read'].put(received)
 
     def write(self):
+        ''' write from the write queue to the serial connection '''
         while not self.stop_event.wait(self.loop_interval):
             if self.q['write'].qsize() > 0:
                 qm = self.q['write'].get()
@@ -215,6 +217,7 @@ class Connection(ConnectionBase):
                     self.ser.write(p)
 
     def read_q_until(self, break_condition, inclusive=False):
+        ''' read the queue until a specified condition '''
         q = self.q['read']
         # TODO add timeout
         while True:
@@ -231,6 +234,7 @@ class Connection(ConnectionBase):
         return m.startswith(self.ps1)
 
     def is_line(self, line):
+        ''' compare a message with a specified line '''
         def c(m):
             if type(m) is bytes:
                 m = m.decode()
@@ -238,10 +242,11 @@ class Connection(ConnectionBase):
         return c
 
     def is_any_prompt(self, m):
+        ''' return true if any type of prompt '''
         return False if self.get_shell_type(m) is None else True
 
     def low_cmd(self, cmd, delimiter):
-
+        ''' send low-level command '''
         # create delimiters
         s_del = '<<--START-CMD-{0}-->>'.format(delimiter.upper())
         e_del = '<<--END-CMD-{0}-->>'.format(delimiter.upper())
@@ -263,6 +268,7 @@ class Connection(ConnectionBase):
             yield m
 
     def req_shell_type(self):
+        ''' make a request and return the shell type '''
         # send line-feed character
         ctrl_j = chr(10)
         self.q['write'].put(Message(ctrl_j))
@@ -272,7 +278,7 @@ class Connection(ConnectionBase):
         return self.get_shell_type(m)
 
     def get_shell_type(self, line):
-
+        ''' return which shell is on the other side '''
         # http://ascii-table.com/ansi-escape-sequences-vt-100.php
         # 7-bit C1 ANSI sequences
         ansi_sequence = re.compile(r'''
