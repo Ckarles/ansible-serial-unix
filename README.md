@@ -1,6 +1,6 @@
 # ansible-serial-unix
 
-> Serial connection plugin for unix remote shells
+> Ansible serial connection plugin for unix remote shells
 
 > Non-blocking IO with threads and queues for "acceptable" performances
 
@@ -19,4 +19,4 @@ The plugin has only been tested on a Linux/GNU *posix* host with a *-ash* Linux 
 
 ## Licensing
 License is GPLv3 to fit with ansible codebase.
-As pySerial is trademarked, I wonder if this piece of code could ever be added to ansible's contributor plugins list, if you know more than me about licensing, I would appreciate if you could tell me more on that particular matter.
+As pySerial is trademarked, I wonder if this piece of code could ever be added to ansible's contributor plugins list, if you know more than me about licensing, I would appreciate if you could help me understand that particular matter.
