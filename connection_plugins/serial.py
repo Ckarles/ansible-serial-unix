@@ -36,24 +36,15 @@ DOCUMENTATION = '''
           - name: ANSIBLE_REMOTE_USER
         vars:
           - name: ansible_user
-      serial_timeout:
-        description:
-          - Number of seconds the connection will wait for a response
-        default: 1
-        type: integer
-        ini:
-          - section: defaults
-            key: timeout
-        env:
-          - name: ANSIBLE_SERIAL_TIMEOUT
-        vars:
-          - name: ansible_serial_timeout
 '''
 
+import dataclasses
 import io
-import serial
-import re
 import queue
+import re
+import serial
+import threading
+import time
 
 import ansible.constants as C
 from ansible.plugins.connection import ConnectionBase
@@ -61,11 +52,21 @@ from ansible.utils.display import Display
 
 display = Display()
 
+@dataclasses.dataclass
+class Message:
+    '''Message to use in write queue'''
+    data: 'typing.Any'
+    is_raw: bool = False
+    track: bool = True
+
 class Connection(ConnectionBase):
     ''' Serial based connections '''
 
     transport = 'serial'
     has_pipelining = False
+
+    # 50ms sleep interval for loops (to no detroy cpu)
+    loop_interval = 0.05
 
     def __init__(self, *args, **kwargs):
 
@@ -77,13 +78,15 @@ class Connection(ConnectionBase):
         host = self._play_context.remote_addr
         self.host = host if host else '/dev/ttyS0'
 
+        self.stdout = io.BytesIO()
+        self.stderr = io.BytesIO()
+
         self.ser = serial.Serial()
 
         self.is_connected = False
-        self.rw_queue = queue.SimpleQueue()
-        self.stdout = io.BytesIO()
-        self.stderr = io.BytesIO()
-        
+        self.ps1 = None
+        self.q = {a: queue.Queue() for a in ['read', 'write']}
+
     def __del__(self):
         self.stdout.close()
         self.stderr.close()
@@ -93,55 +96,62 @@ class Connection(ConnectionBase):
 
         if not self.is_connected:
             self.ser.port = self.get_option('serial_port')
-            self.ser.timeout = self.get_option('serial_timeout')
+            self.ser.timeout = 0
 
             self.ser.open()
             self.is_connected = True
             self.ser_text = io.TextIOWrapper(self.ser)
 
-        if self.get_shell_type() == 'login':
+            # stop event
+            self.stop_event = threading.Event()
+            # start read/write threads
+            self.t = {}
+            for a in ['read', 'write']:
+                self.t[a] = threading.Thread(target=getattr(self, a))
+                self.t[a].start()
+
+        if self.req_shell_type() == 'login':
             self.login()
 
         return self
 
-    def exec_command(self, cmd, in_data=None, sudoable=True, end='\n'):
+    def exec_command(self, cmd, in_data=None, sudoable=True):
         ''' run a command on the remote host'''
 
         super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
-        stderr_remote = 'error-serial.an'
+        stderr_remote = '~{user}/.ansible-serial.stderr'.format(user=self.user)
 
-        # Append return code request to the command
+        # log remote command
         display.vvv('>> {0}'.format(repr(cmd)), host=self.host)
-        cmd = '{cmd} 2>{stderr}; echo $?{end}'.format(cmd=cmd, end=end, stderr=stderr_remote)
-        self.write_buffer(cmd)
 
-        # read the output of the command, store the last line in the code var only
-        m = None
-        for l in self.read_buffer():
-            # stop reading when getting a command prompt
-            if l.startswith(self.ps1):
-                break
-            if m:
-                self.stdout.write(bytes(m, 'utf-8'))
-                display.vvv('<< {0}'.format(m), host=self.host)
-            m = l
-        code = m
-        # reset cursor on stdout stream
-        self.stdout.seek(0)
+        # actual command
+        cmd = '2>{stderr} {cmd}; CODE=$?'.format(cmd=cmd, stderr=stderr_remote)
 
-        # get stderr
-        self.write_buffer('cat {stderr}; rm {stderr}'.format(stderr=stderr_remote))
-        for l in self.read_buffer():
-            # stop reading when getting a command prompt
-            if l.startswith(self.ps1):
-                break
-            self.stderr.write(bytes(m, 'utf-8'))
+        # send the cmd
+        for m in self.low_cmd(cmd, 'out'):
+            self.stdout.write(bytes(m, 'utf-8'))
+            # log stdout
             display.vvv('<< {0}'.format(m), host=self.host)
 
+        # get return code
+        cmd = 'echo "${CODE}"'
+
+        return_code = list(self.low_cmd(cmd, 'code'))[0]
+
+        # get stderr
+        cmd = 'cat {stderr}; rm {stderr}'.format(stderr=stderr_remote)
+
+        for m in self.low_cmd(cmd, 'err'):
+            self.stderr.write(bytes(m, 'utf-8'))
+            # log stderr
+            display.vvv('<< {0}'.format(m), host=self.host)
+
+        # reset cursor on stdout and stderr streams
+        self.stdout.seek(0)
         self.stderr.seek(0)
 
-        return (int(code), self.stdout, self.stderr)
+        return (int(return_code), self.stdout, self.stderr)
 
     def put_file(self, in_path, out_path):
         ''' transfer a file from local to remote '''
@@ -150,12 +160,14 @@ class Connection(ConnectionBase):
 
         display.vvv(u"PUT {0} TO {1}".format(in_path, out_path), host=self.host)
 
+        self.q['write'].put(Message('echo "<<--START-TR-->>"\n'))
         with open(in_path, 'rb') as f:
-            while (b := f.read(512)):
-                self.write_buffer(bytes('head -c -1 >> \'{}\' <<\'<<eof>>\'\n'.format(out_path), 'utf-8') + b + b'\n<<eof>>\n', raw=True, echo=False)
+            while (b := f.read(256)):
+                self.q['write'].put(Message(bytes('head -c -1 >> \'{}\' <<\'<<eof>>\'\n'.format(out_path), 'utf-8') + b + b'\n<<eof>>\n', is_raw=True, track=False))
+        self.q['write'].put(Message('echo "<<--END-TR-->>"\n'))
 
-        # flush read buffer
-        list(self.ser)
+        list(self.read_q_until(self.is_line("<<--START-TR-->>"), inclusive=True))
+        list(self.read_q_until(self.is_line("<<--END-TR-->>"), inclusive=False))
 
     def fetch_file(self, in_path, out_path):
         display.debug("in fetch_file")
@@ -164,52 +176,88 @@ class Connection(ConnectionBase):
         display.debug("in close")
 
         self.logout()
+
+        self.stop_event.set()
+
+        for a in ['read', 'write']:
+            self.t[a].join()
+
         self.ser_text.close()
-        self.rw_queue.close()
         self.ser.close()
         self.is_connected = False
 
+    def read(self):
+        while not self.stop_event.wait(self.loop_interval):
+            for received in self.ser_text:
+                display.vvvv('<<<< {0}'.format(repr(received)))
+                self.q['read'].put(received)
 
-    def read_buffer(self, raw=False):
-
-        stream = self.ser_text
-
-        overtext = ''
-
-        for m in stream:
-            #display.vvv('<<<< {0}'.format(repr(m)))
-            #display.vvv('---- overtext: {0}'.format(repr(overtext)))
-            if not overtext:
-                if self.rw_queue.empty():
-                    #display.vvv('---- yield: {0}'.format(repr(m)))
-                    yield m
-                    continue
+    def write(self):
+        while not self.stop_event.wait(self.loop_interval):
+            if self.q['write'].qsize() > 0:
+                qm = self.q['write'].get()
+                display.vvvv('>>>> {0}'.format(repr(qm.data)))
+                if qm.is_raw:
+                    self.ser.write(qm.data)
                 else:
-                    qm = self.rw_queue.get()
+                    self.ser.write(bytes(qm.data, 'utf-8'))
+
+    def read_q_until(self, break_condition, inclusive=False):
+        q = self.q['read']
+        # TODO add timeout
+        while True:
+            if q.qsize() > 0:
+                m = q.get()
+                if inclusive: yield m
+                if break_condition(m):
+                    break
+                if not inclusive: yield m
             else:
-                qm = overtext
+                time.sleep(self.loop_interval)
 
-            if qm == m:
-                overtext = ''
-                continue
-            else:
-                m = m.rstrip('\n')
-                if qm.startswith(m):
-                    overtext = qm.replace(m, '', 1)
-                else:
-                    # raise error
-                    display.v('error: echo seems distorded: \n expected: {0}\n received: {1}'.format(repr(qm), repr(m)))
+    def is_prompt_line(self, m):
+        return m.startswith(self.ps1)
 
+    def is_line(self, line):
+        def c(m):
+            return m.rstrip() == line.rstrip()
+        return c
 
-    def get_shell_type(self, line=None):
+    def is_any_prompt(self, m):
+        return False if self.get_shell_type(m) is None else True
 
-        # get a prompt invite none
-        if not line:
-            # send line-feed character
-            ctrl_j = chr(10)
-            self.write_buffer(ctrl_j, echo=False)
+    def low_cmd(self, cmd, delimiter):
 
-            line = list(self.read_buffer())[-1]
+        # create delimiters
+        s_del = '<<--START-CMD-{0}-->>'.format(delimiter.upper())
+        e_del = '<<--END-CMD-{0}-->>'.format(delimiter.upper())
+
+        # encapsulate command
+        cmd = 'echo "{s_del}"; {cmd};echo "{e_del}"\n'.format(
+                cmd=cmd,
+                s_del=s_del,
+                e_del=e_del)
+
+        # send commnd to queue
+        self.q['write'].put(Message(cmd))
+
+        # flush queue to starting delimiter
+        list(self.read_q_until(self.is_line(s_del), inclusive=True))
+        
+        # yield the output until the end
+        for m in self.read_q_until(self.is_line(e_del)):
+            yield m
+
+    def req_shell_type(self):
+        # send line-feed character
+        ctrl_j = chr(10)
+        self.q['write'].put(Message(ctrl_j, track=False))
+
+        m = list(self.read_q_until(self.is_any_prompt, inclusive=True))[-1]
+
+        return self.get_shell_type(m)
+
+    def get_shell_type(self, line):
 
         # http://ascii-table.com/ansi-escape-sequences-vt-100.php
         # 7-bit C1 ANSI sequences
@@ -236,33 +284,21 @@ class Connection(ConnectionBase):
             return 'login'
 
         elif re.search('(\$|#) $', clean_line):
-            self.ps1 = line
+            self.ps1 = line.rstrip('\n')
             return 'shell'
 
         else:
-            return 'unkown'
+            return None
 
     def login(self):
-        self.write_buffer('{cmd}{end}'.format(cmd=self.user, end='\n'))
+        self.q['write'].put(Message('{cmd}{end}'.format(cmd=self.user, end='\n')))
 
-        line = list(self.read_buffer())[-1]
-
-        if self.get_shell_type(line=line) != 'shell':
-            print('ERROR: cannot login')
+        if self.req_shell_type() != 'shell':
+            display.v('ERROR: cannot login')
 
     def logout(self):
         ctrl_d = chr(4)
-        self.write_buffer(ctrl_d, echo=False)
+        self.q['write'].put(Message(ctrl_d, track=False))
 
-        line = list(self.read_buffer())[-1]
-
-        if self.get_shell_type(line=line) == 'login':
-            display.debug('Sucessful logout')
-
-    def write_buffer(self, m, raw=False, echo=True):
-        if echo:
-            self.rw_queue.put(m)
-        if raw:
-            self.ser.write(m)
-        else:
-            self.ser_text.write(m)
+        if self.req_shell_type() == 'login':
+            display.v('Sucessful logout')
