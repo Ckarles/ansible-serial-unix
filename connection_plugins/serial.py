@@ -24,6 +24,17 @@ DOCUMENTATION = '''
           - name: ANSIBLE_REMOTE_SERIAL_PORT
         vars:
           - name: ansible_serial_port
+      payload_size:
+        description:
+          - to come
+        default: 512
+        ini:
+          - section: defaults
+            key: payload_size
+        env:
+          - name: ANSIBLE_SERIAL_PAYLOAD_SIZE
+        vars:
+          - name: ansible_serial_payload_size
       remote_user:
         description:
           - User name with which to login to the remote server, normally set by the remote_user keyword.
@@ -57,7 +68,6 @@ class Message:
     '''Message to use in write queue'''
     data: 'typing.Any'
     is_raw: bool = False
-    track: bool = True
 
 class Connection(ConnectionBase):
     ''' Serial based connections '''
@@ -75,8 +85,7 @@ class Connection(ConnectionBase):
         user = self._play_context.remote_user
         self.user = user if user else 'root'
 
-        host = self._play_context.remote_addr
-        self.host = host if host else '/dev/ttyS0'
+        self.host = self._play_context.remote_addr
 
         self.stdout = io.BytesIO()
         self.stderr = io.BytesIO()
@@ -96,11 +105,11 @@ class Connection(ConnectionBase):
 
         if not self.is_connected:
             self.ser.port = self.get_option('serial_port')
+            self.payload_size = int(self.get_option('payload_size'))
             self.ser.timeout = 0
 
             self.ser.open()
             self.is_connected = True
-            self.ser_text = io.TextIOWrapper(self.ser)
 
             # stop event
             self.stop_event = threading.Event()
@@ -130,7 +139,7 @@ class Connection(ConnectionBase):
 
         # send the cmd
         for m in self.low_cmd(cmd, 'out'):
-            self.stdout.write(bytes(m, 'utf-8'))
+            self.stdout.write(m)
             # log stdout
             display.vvv('<< {0}'.format(m), host=self.host)
 
@@ -143,7 +152,7 @@ class Connection(ConnectionBase):
         cmd = 'cat {stderr}; rm {stderr}'.format(stderr=stderr_remote)
 
         for m in self.low_cmd(cmd, 'err'):
-            self.stderr.write(bytes(m, 'utf-8'))
+            self.stderr.write(m)
             # log stderr
             display.vvv('<< {0}'.format(m), host=self.host)
 
@@ -162,8 +171,8 @@ class Connection(ConnectionBase):
 
         self.q['write'].put(Message('echo "<<--START-TR-->>"\n'))
         with open(in_path, 'rb') as f:
-            while (b := f.read(256)):
-                self.q['write'].put(Message(bytes('head -c -1 >> \'{}\' <<\'<<eof>>\'\n'.format(out_path), 'utf-8') + b + b'\n<<eof>>\n', is_raw=True, track=False))
+            while (b := f.read(512)):
+                self.q['write'].put(Message(bytes('head -c -1 >> \'{}\' <<\'<<eof>>\'\n'.format(out_path), 'utf-8') + b + b'\n<<eof>>\n', is_raw=True))
         self.q['write'].put(Message('echo "<<--END-TR-->>"\n'))
 
         list(self.read_q_until(self.is_line("<<--START-TR-->>"), inclusive=True))
@@ -182,13 +191,12 @@ class Connection(ConnectionBase):
         for a in ['read', 'write']:
             self.t[a].join()
 
-        self.ser_text.close()
         self.ser.close()
         self.is_connected = False
 
     def read(self):
         while not self.stop_event.wait(self.loop_interval):
-            for received in self.ser_text:
+            for received in self.ser:
                 display.vvvv('<<<< {0}'.format(repr(received)))
                 self.q['read'].put(received)
 
@@ -196,11 +204,15 @@ class Connection(ConnectionBase):
         while not self.stop_event.wait(self.loop_interval):
             if self.q['write'].qsize() > 0:
                 qm = self.q['write'].get()
+
                 display.vvvv('>>>> {0}'.format(repr(qm.data)))
-                if qm.is_raw:
-                    self.ser.write(qm.data)
-                else:
-                    self.ser.write(bytes(qm.data, 'utf-8'))
+                bm = qm.data if qm.is_raw else bytes(qm.data, 'utf-8')
+
+                p_size = self.payload_size
+                # split in smaller payloads
+                payloads = [bm[i:i+p_size] for i in range(0, len(bm), p_size)]
+                for p in payloads:
+                    self.ser.write(p)
 
     def read_q_until(self, break_condition, inclusive=False):
         q = self.q['read']
@@ -220,6 +232,8 @@ class Connection(ConnectionBase):
 
     def is_line(self, line):
         def c(m):
+            if type(m) is bytes:
+                m = m.decode()
             return m.rstrip() == line.rstrip()
         return c
 
@@ -244,14 +258,14 @@ class Connection(ConnectionBase):
         # flush queue to starting delimiter
         list(self.read_q_until(self.is_line(s_del), inclusive=True))
         
-        # yield the output until the end
+        # yield the output until the endind delimiter
         for m in self.read_q_until(self.is_line(e_del)):
             yield m
 
     def req_shell_type(self):
         # send line-feed character
         ctrl_j = chr(10)
-        self.q['write'].put(Message(ctrl_j, track=False))
+        self.q['write'].put(Message(ctrl_j))
 
         m = list(self.read_q_until(self.is_any_prompt, inclusive=True))[-1]
 
@@ -276,7 +290,7 @@ class Connection(ConnectionBase):
         ## end with ANSI CPR (Response to cursor position request)
         #ansi_end_CPR = r'\x1B\[\d+;\d+R$'
 
-        escaped_line = bytes(line, 'utf-8').decode('unicode_escape')
+        escaped_line = line.decode('unicode_escape')
         # remove ANSI sequences
         clean_line = ansi_sequence.sub('', escaped_line)
 
@@ -284,7 +298,7 @@ class Connection(ConnectionBase):
             return 'login'
 
         elif re.search('(\$|#) $', clean_line):
-            self.ps1 = line.rstrip('\n')
+            self.ps1 = bytes(line.decode().rstrip('\n'), 'utf-8')
             return 'shell'
 
         else:
@@ -298,7 +312,7 @@ class Connection(ConnectionBase):
 
     def logout(self):
         ctrl_d = chr(4)
-        self.q['write'].put(Message(ctrl_d, track=False))
+        self.q['write'].put(Message(ctrl_d))
 
         if self.req_shell_type() == 'login':
             display.v('Sucessful logout')
