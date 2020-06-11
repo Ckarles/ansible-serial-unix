@@ -189,11 +189,12 @@ class Connection(ConnectionBase):
         #cmd = 'split -b 512 --filter "base64" "{0}"'.format(in_path)
         cmd = 'base64 {0}'.format(in_path)
 
+        rm = b''
         with open(out_path, 'wb') as f:
-            buf = b''
             for b in self.low_cmd(cmd, 'fetch'):
-                buf = buf + b.rstrip()
-            f.write(base64.b64decode(buf))
+                b = b.rstrip()
+                d, rm = self.decode(b, rm)
+                f.write(d)
 
     def close(self):
         display.debug("in close")
@@ -229,6 +230,16 @@ class Connection(ConnectionBase):
                 payloads = [bm[i:i+p_size] for i in range(0, len(bm), p_size)]
                 for p in payloads:
                     self.ser.write(p)
+
+    def decode(self, b, rm=b''):
+        ''' b64 decoder with remainder for unbounded messages '''
+        b = rm + b
+        rm = b''
+        rm_len = len(b) % 4
+        if rm_len:
+            rm = b[-rm_len:]
+            b = b[:-rm_len]
+        return (base64.b64decode(b), rm)
 
     def read_q_until(self, break_condition, inclusive=False):
         ''' read the queue until a specified condition '''
