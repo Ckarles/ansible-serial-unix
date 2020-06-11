@@ -169,10 +169,13 @@ class Connection(ConnectionBase):
 
         display.vvv(u"PUT {0} TO {1}".format(in_path, out_path), host=self.host)
 
+        cmd_pre = bytes('head -c -1 >> \'{}\' <<\'<<eof>>\'\n'.format(out_path), 'utf-8')
+        cmd_post = bytes('\n<<eof>>\n', 'utf-8')
+
         self.q['write'].put(Message('echo "<<--START-TR-->>"\n'))
         with open(in_path, 'rb') as f:
             while (b := f.read(512)):
-                self.q['write'].put(Message(bytes('head -c -1 >> \'{}\' <<\'<<eof>>\'\n'.format(out_path), 'utf-8') + b + b'\n<<eof>>\n', is_raw=True))
+                self.q['write'].put(Message(cmd_pre + b + cmd_post, is_raw=True))
         self.q['write'].put(Message('echo "<<--END-TR-->>"\n'))
 
         list(self.read_q_until(self.is_line("<<--START-TR-->>"), inclusive=True))
