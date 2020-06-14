@@ -69,6 +69,7 @@ import time
 
 import ansible.constants as C
 from ansible.plugins.connection import ConnectionBase
+from ansible.errors import AnsibleError
 from ansible.utils.display import Display
 
 display = Display()
@@ -94,6 +95,9 @@ class Connection(ConnectionBase):
 
         user = self._play_context.remote_user
         self.user = user if user else 'root'
+
+        passwd = self._play_context.password
+        self.passwd = passwd if passwd else ''
 
         self.host = self._play_context.remote_addr
 
@@ -345,6 +349,9 @@ class Connection(ConnectionBase):
         if re.search(' login: $', clean_line):
             return 'login'
 
+        elif re.search('^Password: $', clean_line):
+            return 'password'
+
         elif re.search('(\$|#) $', clean_line):
             self.ps1 = bytes(line.decode().rstrip('\n'), 'utf-8')
             return 'shell'
@@ -355,8 +362,18 @@ class Connection(ConnectionBase):
     def login(self):
         self.q['write'].put(Message('{cmd}{end}'.format(cmd=self.user, end='\n')))
 
-        if self.req_shell_type() != 'shell':
-            display.v('ERROR: cannot login')
+        # read the last line
+        ll = list(self.read_q_until(self.is_any_prompt, inclusive=True))[-1]
+        shell_type = self.get_shell_type(ll)
+
+        if shell_type == 'password':
+            self.q['write'].put(Message('{cmd}{end}'.format(cmd=self.passwd, end='\n')))
+            #time.sleep(5)
+            shell_type = self.req_shell_type()
+
+        if shell_type != 'shell':
+            raise AnsibleError('Cannot login')
+
 
     def logout(self):
         ctrl_d = chr(4)
