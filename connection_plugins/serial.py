@@ -9,6 +9,16 @@ DOCUMENTATION = '''
     author: Charles Durieux (charles-durieux@negentropy.in.net)
     version_added: None
     options:
+      baudrate:
+        description: Serial connetion baudrate
+        default: 9600
+        ini:
+          - section: defaults
+            key: baudrate
+        env:
+          - name: ANSIBLE_SERIAL_BAUDRATE
+        vars:
+          - name: ansible_serial_baudrate
       host:
         description: Hostname of the remote machine
         default: inventory_hostname
@@ -105,6 +115,7 @@ class Connection(ConnectionBase):
 
         if not self.is_connected:
             self.ser.port = self.get_option('serial_port')
+            self.ser.baudrate = self.get_option('baudrate')
             self.payload_size = int(self.get_option('payload_size'))
             self.ser.timeout = 0
 
