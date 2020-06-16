@@ -118,22 +118,26 @@ class Connection(ConnectionBase):
         ''' connect to the serial device '''
 
         if not self.is_connected:
+            # get serial connection parameters
             self.ser.port = self.get_option('serial_port')
             self.ser.baudrate = self.get_option('baudrate')
             self.payload_size = int(self.get_option('payload_size'))
             self.ser.timeout = 0
 
+            # initiate serial connection
             self.ser.open()
             self.is_connected = True
 
-            # stop event
+            # declare stop event
             self.stop_event = threading.Event()
+
             # start read/write threads
             self.t = {}
             for a in ['read', 'write']:
                 self.t[a] = threading.Thread(target=getattr(self, a))
                 self.t[a].start()
 
+        # login if necessary
         if self.req_shell_type() == 'login':
             self.login()
 
@@ -144,53 +148,58 @@ class Connection(ConnectionBase):
 
         super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
-        stderr_remote = '~{user}/.ansible-serial.stderr'.format(user=self.user)
 
-        # log remote command
         display.vvv('>> {0}'.format(repr(cmd)), host=self.host)
 
-        # actual command
+        # put stderr in a temporary file and store the return code in a variable
+        # TODO use ansible fn to find a suitable place to put it
+        stderr_remote = '~{user}/.ansible-serial.stderr'.format(user=self.user)
         cmd = '2>{stderr} {cmd}; CODE=$?'.format(cmd=cmd, stderr=stderr_remote)
 
-        # send the cmd
+        # send the cmd and get stdout
         for m in self.low_cmd(cmd, 'out'):
             self.stdout.write(m)
-            # log stdout
             display.vvv('<< {0}'.format(m), host=self.host)
 
         # get return code
         cmd = 'echo "${CODE}"'
+        return_code = int(list(self.low_cmd(cmd, 'code'))[0])
 
-        return_code = list(self.low_cmd(cmd, 'code'))[0]
-
-        # get stderr
+        # get stderr and remove temp file
         cmd = 'cat {stderr}; rm {stderr}'.format(stderr=stderr_remote)
-
         for m in self.low_cmd(cmd, 'err'):
             self.stderr.write(m)
-            # log stderr
             display.vvv('<< {0}'.format(m), host=self.host)
 
         # reset cursor on stdout and stderr streams
         self.stdout.seek(0)
         self.stderr.seek(0)
 
-        return (int(return_code), self.stdout, self.stderr)
+        return (return_code, self.stdout, self.stderr)
 
     def put_file(self, in_path, out_path):
         ''' transfer a file from local to remote '''
 
         super(Connection, self).put_file(in_path, out_path)
 
+        # TODO (in|out)_path sanitization (if not done already)
         display.vvv(u"PUT {0} TO {1}".format(in_path, out_path), host=self.host)
 
+        # cmd for every payload
         cmd_pre = bytes('head -c -1 >> \'{}\' <<\'<<eof>>\'\n'.format(out_path), 'utf-8')
         cmd_post = bytes('\n<<eof>>\n', 'utf-8')
 
+        # send start delimiter
         self.q['write'].put(Message('echo "<<--START-TR-->>"\n'))
+
         with open(in_path, 'rb') as f:
+            # split the file in payloads of 512bytes
             while (b := f.read(512)):
-                self.q['write'].put(Message(cmd_pre + b + cmd_post, is_raw=True))
+                # contruct the command and send it
+                cmd = Message(cmd_pre + b + cmd_post, is_raw=True)
+                self.q['write'].put(cmd)
+
+        # send end delimiter
         self.q['write'].put(Message('echo "<<--END-TR-->>"\n'))
 
         list(self.read_q_until(self.is_line("<<--START-TR-->>"), inclusive=True))
@@ -203,10 +212,12 @@ class Connection(ConnectionBase):
 
         display.vvv(u'FETCH {0} TO {1}'.format(in_path, out_path), host=self.host)
 
+        # file in reveived in base64
         #best option: (requires coreutils on remote machine)
         #cmd = 'split -b 512 --filter "base64" "{0}"'.format(in_path)
         cmd = 'base64 {0}'.format(in_path)
 
+        # receive the decoded base64 splited file
         rm = b''
         with open(out_path, 'wb') as f:
             for b in self.low_cmd(cmd, 'fetch'):
@@ -217,13 +228,16 @@ class Connection(ConnectionBase):
     def close(self):
         display.debug("in close")
 
+        # logout from remote
         self.logout()
-
+        # trigger event to stop the read/write workers
         self.stop_event.set()
 
+        # wait until threads have properly exited
         for a in ['read', 'write']:
             self.t[a].join()
 
+        # close serial connection
         self.ser.close()
         self.is_connected = False
 
@@ -243,8 +257,8 @@ class Connection(ConnectionBase):
                 display.vvvv('>>>> {0}'.format(repr(qm.data)))
                 bm = qm.data if qm.is_raw else bytes(qm.data, 'utf-8')
 
-                p_size = self.payload_size
                 # split in smaller payloads
+                p_size = self.payload_size
                 payloads = [bm[i:i+p_size] for i in range(0, len(bm), p_size)]
                 for p in payloads:
                     self.ser.write(p)
@@ -309,7 +323,7 @@ class Connection(ConnectionBase):
         # flush queue to starting delimiter
         list(self.read_q_until(self.is_line(s_del), inclusive=True))
         
-        # yield the output until the endind delimiter
+        # yield the output until the ending delimiter
         for m in self.read_q_until(self.is_line(e_del)):
             yield m
 
@@ -319,8 +333,10 @@ class Connection(ConnectionBase):
         ctrl_j = chr(10)
         self.q['write'].put(Message(ctrl_j))
 
+        # wait until a prompt is found
         m = list(self.read_q_until(self.is_any_prompt, inclusive=True))[-1]
 
+        # return the shell type
         return self.get_shell_type(m)
 
     def get_shell_type(self, line):
