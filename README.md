@@ -9,13 +9,30 @@
 ## Install
 Follow Ansible documentation about [adding a plugin locally](https://docs.ansible.com/ansible/latest/dev_guide/developing_locally.html#adding-a-plugin-locally).
 
-Ansible is not making any distinction between regular files and symbolic links, but git does, so you could add a symlink to the plugin in this git repo from your chosen *local* ansible plugin dir, this way the plugin would update automatically when you `git pull`
+Ansible is not making any distinction between regular files and symbolic links, but git does, so you could add a symlink to the plugin in this git repo from your chosen *local* ansible plugin dir, this way the plugin would update automatically when you `git pull`.
 
-e.g, to install in $HOME/.ansible:
+E.g, to install in `$HOME/.ansible`:
 ```bash
+# clone repo
 git clone https://gitlab.com/Ckarles/ansible-serial-unix.git
+
+# install plugin
 mkdir -p ${HOME}/.ansible/plugins/connection
 ln -s ${HOME}/ansible-serial-unix/serial.py $_
+
+# verify that it's properly installed
+ansible-doc -t connection serial
+```
+
+Sample of yml inventory file:
+```yaml
+all:
+  hosts:
+    nyan-cat:
+      ansible_connection: serial
+      ansible_serial_port: /dev/ttyUSB0
+      ansible_serial_baudrate: 115200
+      ansible_password: '?c75[#c43wcv'
 ```
 
 ## Requirements
