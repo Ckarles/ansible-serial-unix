@@ -6,6 +6,15 @@
 
 > Uses pySerial under the hood
 
+## Requirements
+### On the local host:
+- **python3** (python2 not supported as of now)
+
+### On the remote host:
+- **Busybox** (or equivalent)
+- **bash** (could work on other shells if it supports heredocs, piping and redirection)
+- **sulogin** is the only supported login shell as of now
+
 ## Install
 Follow Ansible documentation about [adding a plugin locally](https://docs.ansible.com/ansible/latest/dev_guide/developing_locally.html#adding-a-plugin-locally).
 
@@ -34,15 +43,6 @@ all:
       ansible_serial_baudrate: 115200
       ansible_password: '?c75[#c43wcv'
 ```
-
-## Requirements
-### On the local host:
-- **python3** (python2 not supported as of now)
-
-### On the remote host:
-- **Busybox** (or equivalent)
-- **bash** (could work on other shells if it supports heredocs, piping and redirection)
-- **sulogin** is the only supported login shell as of now
 
 ## Compatibility
 I'm not planning on supporting windows remote guests, however the plugin is intended to work from any supported ansible local host.
