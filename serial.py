@@ -11,7 +11,7 @@ DOCUMENTATION = '''
     options:
       baudrate:
         description: Serial connetion baudrate
-        default: 9600
+        default: 115200
         ini:
           - section: defaults
             key: baudrate
