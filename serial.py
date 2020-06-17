@@ -86,8 +86,11 @@ class Connection(ConnectionBase):
     transport = 'serial'
     has_pipelining = False
 
-    # 50ms sleep interval for loops (to no detroy cpu)
+    # sleep interval for loops (to no detroy cpu), in seconds
     loop_interval = 0.05
+
+    # seconds to wait if the response is not what we expect
+    read_timeout = 2
 
     def __init__(self, *args, **kwargs):
 
@@ -138,7 +141,11 @@ class Connection(ConnectionBase):
                 self.t[a].start()
 
         # login if necessary
-        if self.req_shell_type() == 'login':
+        try:
+            shell_type = self.req_shell_type()
+        except LookupError as err:
+            raise AnsibleError('Initial connection failed\n{0}'.format(err))
+        if  shell_type == 'login':
             self.login()
 
         return self
@@ -276,16 +283,29 @@ class Connection(ConnectionBase):
     def read_q_until(self, break_condition, inclusive=False):
         ''' read the queue until a specified condition '''
         q = self.q['read']
-        # TODO add timeout
+        t_start = time.time()
+        timeout = self.read_timeout
         while True:
             if q.qsize() > 0:
+                # get the next message
                 m = q.get()
+
+                # yield the message and break the loop if needed
                 if inclusive: yield m
                 if break_condition(m):
                     break
                 if not inclusive: yield m
+
+                # after receiving any message, reset the timeout
+                t_start = time.time()
             else:
                 time.sleep(self.loop_interval)
+                if time.time() >= t_start + timeout:
+                    raise LookupError(
+                        'break_condition "{fn}" has not been met for {t} seconds'.format(
+                            fn=repr(break_condition),
+                            t=timeout
+                    ))
 
     def is_prompt_line(self, m):
         return m.startswith(self.ps1)

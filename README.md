@@ -51,7 +51,7 @@ The plugin has only been tested (and as a POC as of now) on a Linux/GNU *posix* 
 If you intent to use this plugin with different hosts, please tell me if it is working or not on your particular systems so I can fill a compatibility table, and make the plugin compatible with more system condfigurations.
 
 ## Troubleshooting
-If the connection ***hangs on***, it may be because you don't have sufficent permission to write to the serial connection. The simplest way to fix this issue temporarily is to just `chown "$USER" /dev/<your serial device>`
+If you get a `Initial connection failed` error, it may be because you don't have sufficent permission to write to the serial connection. The simplest way to fix this issue temporarily is to just `chown "$USER" /dev/<your serial device>`.
 
 ## TODO list
 - Find a better way to identify remote's shell
