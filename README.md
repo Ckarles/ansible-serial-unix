@@ -50,9 +50,6 @@ I'm not planning on supporting windows remote guests, however the plugin is inte
 The plugin has only been tested (and as a POC as of now) on a Linux/GNU *posix* host with an Alpine Linux target (*-ash* & *busybox*). I don't have the time nor the usage to test it on other local and remote systems.
 If you intent to use this plugin with different hosts, please tell me if it is working or not on your particular systems so I can fill a compatibility table, and make the plugin compatible with more system condfigurations.
 
-## Troubleshooting
-If you get a `Initial connection failed` error, it may be because you don't have sufficent permission to write to the serial connection. The simplest way to fix this issue temporarily is to just `chown "$USER" /dev/<your serial device>`.
-
 ## TODO list
 - Find a better way to identify remote's shell
 - Support python2 to respect ansible plugin requirements
