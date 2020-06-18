@@ -141,10 +141,7 @@ class Connection(ConnectionBase):
                 self.t[a].start()
 
         # login if necessary
-        try:
-            shell_type = self.req_shell_type()
-        except LookupError as err:
-            raise AnsibleError('Initial connection failed\n{0}'.format(err))
+        shell_type = self.req_shell_type()
         if  shell_type == 'login':
             self.login()
 
