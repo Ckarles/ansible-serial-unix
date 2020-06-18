@@ -225,11 +225,10 @@ class Connection(ConnectionBase):
         cmd = 'base64 {0}'.format(in_path)
 
         # receive the decoded base64 splited file
-        rm = b''
         with open(out_path, 'wb') as f:
+            decode = self.decoder()
             for b in self.low_cmd(cmd, 'fetch'):
-                b = b.rstrip()
-                d, rm = self.decode(b, rm)
+                d = decode(b.rstrip())
                 f.write(d)
 
     def close(self):
@@ -270,15 +269,25 @@ class Connection(ConnectionBase):
                 for p in payloads:
                     self.ser.write(p)
 
-    def decode(self, b, rm=b''):
+    def decoder(self):
         ''' b64 decoder with remainder for unbounded messages '''
-        b = rm + b
         rm = b''
-        rm_len = len(b) % 4
-        if rm_len:
-            rm = b[-rm_len:]
-            b = b[:-rm_len]
-        return (base64.b64decode(b), rm)
+
+        def d(b):
+            nonlocal rm
+            # append the encoded data to the remainder
+            b = rm + b
+            # reset the remainder
+            rm = b''
+            # get the highest length multiple of 4
+            rm_len = len(b) % 4
+            if rm_len:
+                # right side is remaining
+                rm = b[-rm_len:]
+                # left side is decoded
+                b = b[:-rm_len]
+            return base64.b64decode(b)
+        return d
 
     def read_q_until(self, break_condition, inclusive=False):
         ''' read the queue until a specified condition '''
