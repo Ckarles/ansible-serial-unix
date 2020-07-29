@@ -23,11 +23,16 @@ Ansible is not making any distinction between regular files and symbolic links, 
 E.g, to install in `$HOME/.ansible`:
 ```bash
 # clone repo
+cd ~
 git clone https://gitlab.com/Ckarles/ansible-serial-unix.git
+cd ansible-serial-unix
+
+# install dependency (pyserial)
+pip3 install -r requirements.txt
 
 # install plugin
 mkdir -p ${HOME}/.ansible/plugins/connection
-ln -s ${HOME}/ansible-serial-unix/serial.py $_
+ln -s ${HOME}/ansible-serial-unix/serial.py ${HOME}/.ansible/plugins/connection
 
 # verify that it's properly installed
 ansible-doc -t connection serial
