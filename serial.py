@@ -74,6 +74,7 @@ from ansible.utils.display import Display
 
 display = Display()
 
+# TODO remove message dataclass
 @dataclasses.dataclass
 class Message:
     '''Message to use in write queue'''
@@ -90,7 +91,7 @@ class Connection(ConnectionBase):
     loop_interval = 0.05
 
     # seconds to wait if the response is not what we expect
-    read_timeout = 2
+    read_timeout = 5
 
     def __init__(self, *args, **kwargs):
 
@@ -111,11 +112,14 @@ class Connection(ConnectionBase):
 
         self.is_connected = False
         self.ps1 = None
+        # TODO improve clarity
         self.q = {a: queue.Queue() for a in ['read', 'write']}
 
     def __del__(self):
-        self.stdout.close()
-        self.stderr.close()
+        if isinstance(self.stdout, io.BytesIO):
+            self.stdout.close()
+        if isinstance(self.stderr, io.BytesIO):
+            self.stderr.close()
 
     def _connect(self):
         ''' connect to the serial device '''
@@ -152,6 +156,14 @@ class Connection(ConnectionBase):
 
         super(Connection, self).exec_command(cmd, in_data=in_data, sudoable=sudoable)
 
+        # TODO factor these streams initialization
+        # open streams for stdout and stderr
+        if isinstance(self.stdout, io.BytesIO):
+            self.stdout.close()
+        if isinstance(self.stderr, io.BytesIO):
+            self.stderr.close()
+        self.stdout = io.BytesIO()
+        self.stderr = io.BytesIO()
 
         display.vvv('>> {0}'.format(repr(cmd)), host=self.host)
 
@@ -168,6 +180,7 @@ class Connection(ConnectionBase):
         # get return code
         cmd = 'echo "${CODE}"'
         return_code = int(list(self.low_cmd(cmd, 'code'))[0])
+        display.vvv('<< {0}'.format(return_code))
 
         # get stderr and remove temp file
         cmd = 'cat {stderr}; rm {stderr}'.format(stderr=stderr_remote)
@@ -190,17 +203,22 @@ class Connection(ConnectionBase):
         display.vvv(u"PUT {0} TO {1}".format(in_path, out_path), host=self.host)
 
         # cmd for every payload
-        cmd_pre = bytes('head -c -1 >> \'{}\' <<\'<<eof>>\'\n'.format(out_path), 'utf-8')
-        cmd_post = bytes('\n<<eof>>\n', 'utf-8')
+        #cmd_pre = bytes('head -c -1 >> \'{}\' <<\'<<eof>>\'\n'.format(out_path), 'utf-8')
+        #cmd_post = bytes('\n<<eof>>\n', 'utf-8')
+
+        # TODO truly calculate max pyload size
+
+        cmd_pre = bytes('echo -n \'', 'utf-8')
+        cmd_post = bytes('\' | base64 -d >> {}\n'.format(out_path), 'utf-8')
 
         # send start delimiter
         self.q['write'].put(Message('echo "<<--START-TR-->>"\n'))
 
         with open(in_path, 'rb') as f:
-            # split the file in payloads of 512bytes
-            while (b := f.read(512)):
+            # split the file in payloads of < 512 bytes
+            while (b := f.read(510)):
                 # contruct the command and send it
-                cmd = Message(cmd_pre + b + cmd_post, is_raw=True)
+                cmd = Message(cmd_pre + base64.b64encode(b) + cmd_post)
                 self.q['write'].put(cmd)
 
         # send end delimiter
@@ -258,13 +276,13 @@ class Connection(ConnectionBase):
                 qm = self.q['write'].get()
 
                 display.vvvv('>>>> {0}'.format(repr(qm.data)))
-                bm = qm.data if qm.is_raw else bytes(qm.data, 'utf-8')
+                bm = qm.data if type(qm.data) is bytes else bytes(qm.data, 'utf-8')
 
                 # split in smaller payloads
                 p_size = self.payload_size
-                payloads = [bm[i:i+p_size] for i in range(0, len(bm), p_size)]
-                for p in payloads:
-                    self.ser.write(p)
+                #payloads = [bm[i:i+p_size] for i in range(0, len(bm), p_size)]
+                #for p in payloads:
+                self.ser.write(bm)
 
     def decoder(self):
         ''' b64 decoder with remainder for unbounded messages '''
