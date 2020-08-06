@@ -212,6 +212,7 @@ class Connection(ConnectionBase):
         cmd_post = bytes('\' | base64 -d >> {}\n'.format(out_path), 'utf-8')
 
         # send start delimiter
+        # TODO add variable to lessen the length of $out_path
         self.q['write'].put(Message('echo "<<--START-TR-->>"\n'))
 
         with open(in_path, 'rb') as f:
